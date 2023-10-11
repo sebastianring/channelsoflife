@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"math/rand"
-	"os"
-	"os/exec"
-	"time"
+	// "os"
+	// "os/exec"
+	"strconv"
+	"sync"
+	// "time"
 )
 
 // Any live cell with fewer than two live neighbours dies, as if by underpopulation.
@@ -14,8 +16,8 @@ import (
 // Any dead cell with exactly three live neighbours becomes a live cell, as if by reproduction.
 
 type Pos struct {
-	x uint
-	y uint
+	x int
+	y int
 }
 
 type Cell struct {
@@ -53,11 +55,9 @@ func (c *Cell) updateCell() {
 			c.Alive = true
 		}
 	}
-
-	// updateNeighbours(c.Pos, 1)
 }
 
-func NewCell(alive bool, x uint, y uint, alives *[]*Cell) *Cell {
+func NewCell(alive bool, x int, y int, alives *[]*Cell) *Cell {
 	c := Cell{
 		Alive: alive,
 		Pos: Pos{
@@ -67,7 +67,9 @@ func NewCell(alive bool, x uint, y uint, alives *[]*Cell) *Cell {
 		Channel: make(chan int, 1),
 	}
 
-	*alives = append(*alives, &c)
+	if alive {
+		*alives = append(*alives, &c)
+	}
 
 	return &c
 }
@@ -81,11 +83,37 @@ func GetPos() *Pos {
 	return &p
 }
 
-// func updateNeighbours(pos Pos, val int) {
-// 	minx := max(0, pos.x-3)
-// 	maxx := min()
-//
-// }
+func getNeighbours(neighbours chan *Cell, pos Pos, world [][]*Cell) {
+	// neighbours := make([]*Cell, 3)
+
+	minx := max(0, pos.x-1)
+	maxx := min(99, pos.x+1)
+
+	miny := max(0, pos.y-1)
+	maxy := min(39, pos.y+1)
+
+	for y := miny; y <= maxy; y++ {
+		for x := minx; x <= maxx; x++ {
+			neighbours <- world[y][x]
+		}
+	}
+}
+
+func updateNeighbors(val int, neighbours []*Cell) {
+	for _, cell := range neighbours {
+		cell.AliveNeighbors += val
+	}
+}
+
+func isCellInSlice(cell *Cell, slice []*Cell) bool {
+	for _, cellInSlice := range slice {
+		if cell.Pos == cellInSlice.Pos {
+			return true
+		}
+	}
+
+	return false
+}
 
 type world struct {
 	width  uint
@@ -95,20 +123,20 @@ type world struct {
 }
 
 func main() {
-	width := uint(100)
-	height := uint(40)
+	width := 100
+	height := 40
 	alives := []*Cell{}
 
 	world := make([][]*Cell, height)
 
-	updateChannel := make(chan int, 1)
+	// updateChannel := make(chan int, 1)
 
-	for y := uint(0); y < height; y++ {
+	for y := 0; y < height; y++ {
 		world[y] = make([]*Cell, width)
 
-		for x := uint(0); x < width; x++ {
+		for x := 0; x < width; x++ {
 			var alive bool
-			chance := rand.Intn(100)
+			chance := rand.Intn(500)
 
 			if chance == 1 {
 				alive = true
@@ -120,23 +148,58 @@ func main() {
 		}
 	}
 
-	for {
-		select {
-		case <-updateChannel:
+	printWorld(&world)
+	fmt.Println("number of alives: " + strconv.Itoa(len(alives)))
 
-		}
-		cmd := exec.Command("clear")
-		cmd.Stdout = os.Stdout
-		cmd.Run()
+	var wg sync.WaitGroup
+	neighboursChan := make(chan *Cell, 3)
+	neighbours := []*Cell{}
 
-		printWorld(&world)
-
-		time.Sleep(1000 * time.Millisecond)
+	for _, cell := range alives {
+		wg.Add(1)
+		go func(cell *Cell) {
+			defer wg.Done()
+			getNeighbours(neighboursChan, cell.Pos, world)
+		}(cell)
 	}
+
+	go func() {
+		wg.Wait()
+		close(neighboursChan)
+	}()
+
+	for data := range neighboursChan {
+		if !isCellInSlice(data, neighbours) {
+			neighbours = append(neighbours, data)
+		}
+	}
+
+	fmt.Println(len(neighbours))
+
+	// for _, cell := range neighbours {
+	// 	fmt.Println(cell.Pos)
+	// }
+	//
+	// 	select {
+	// 	case <-updateChannel:
+	//
+	// 	}
+	// 	cmd := exec.Command("clear")
+	// 	cmd.Stdout = os.Stdout
+	// 	cmd.Run()
+	//
+	// 	printWorld(&world)
+	//
+	// 	time.Sleep(1000 * time.Millisecond)
 }
 
 func printWorld(w *[][]*Cell) {
-	for _, row := range *w {
+	for i, row := range *w {
+		if i < 10 {
+			fmt.Printf("%v  ", i)
+		} else {
+			fmt.Printf("%v ", i)
+		}
 		for _, cell := range row {
 			if !cell.Alive {
 				fmt.Print(".")
@@ -146,4 +209,20 @@ func printWorld(w *[][]*Cell) {
 		}
 		fmt.Print("\n")
 	}
+}
+
+func max(a int, b int) int {
+	if a < b {
+		return b
+	}
+
+	return a
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+
+	return b
 }
