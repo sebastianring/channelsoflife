@@ -45,6 +45,7 @@ type EventType byte
 const (
 	CellComeAlive EventType = 0
 	CellDied      EventType = 1
+	CellMonitor   EventType = 2
 )
 
 func NewWorld(rows int, cols int) *World {
@@ -106,6 +107,14 @@ func (c *Cell) updateCell(ch chan *Event) {
 			// fmt.Printf("Cell dies at x: %v y: %v\n", c.Pos.x, c.Pos.y)
 
 			ch <- newEvent
+		} else {
+			newEvent := &Event{
+				Pos:       c.Pos,
+				EventType: CellMonitor,
+				Val:       0,
+			}
+
+			ch <- newEvent
 		}
 	} else {
 		if c.AliveNeighbors == 3 {
@@ -149,10 +158,10 @@ func GetPos() *Pos {
 func getNeighbours(pos Pos, world *World) []*Cell {
 	neighbours := []*Cell{}
 	minx := max(0, pos.x-1)
-	maxx := min(world.Cols, pos.x+1)
+	maxx := min(world.Cols-1, pos.x+1)
 
 	miny := max(0, pos.y-1)
-	maxy := min(world.Rows, pos.y+1)
+	maxy := min(world.Rows-1, pos.y+1)
 
 	for y := miny; y <= maxy; y++ {
 		for x := minx; x <= maxx; x++ {
@@ -224,14 +233,17 @@ type world struct {
 }
 
 func main() {
-	world := NewWorld(5, 15)
-	initialSpawns := 10
+	rows := 10
+	cols := 20
+
+	world := NewWorld(rows, cols)
+	initialSpawns := int(world.Rows * world.Cols / 3)
 	events := []*Event{}
 
 	for initialSpawns > len(events) {
 		for {
-			randx := rand.Intn(world.Cols - 1)
-			randy := rand.Intn(world.Rows - 1)
+			randx := rand.Intn(world.Cols)
+			randy := rand.Intn(world.Rows)
 
 			pos := Pos{
 				x: randx,
@@ -253,15 +265,14 @@ func main() {
 	}
 
 	for {
+		incomingCounter := len(events)
 		cmd := exec.Command("clear")
 		cmd.Stdout = os.Stdout
 		cmd.Run()
 
-		printWorld(&world.Map)
-
-		for _, event := range events {
-			fmt.Println(event)
-		}
+		// for _, event := range events {
+		// 	fmt.Println(event)
+		// }
 
 		eventChan := make(chan *Event, 3)
 		var wg sync.WaitGroup
@@ -283,6 +294,7 @@ func main() {
 		wg.Wait()
 
 		affectedCellsTotal := affectedNeighbours
+
 		for _, event := range events {
 			affectedCellsTotal = append(affectedCellsTotal, world.Map[event.Pos.y][event.Pos.x])
 		}
@@ -292,30 +304,34 @@ func main() {
 			close(eventChan)
 		}()
 
+		middleCounter := 0
 		for _, cell := range affectedCellsTotal {
 			wg.Add(1)
 			go func(cell *Cell) {
+				middleCounter++
 				defer wg.Done()
 				cell.updateCell(eventChan)
 			}(cell)
 		}
 
-		printWorldWAlives(&world.Map)
-
-		time.Sleep(1 * time.Second)
-
 		events = []*Event{}
+		resetCounter := len(events)
 		counter := 0
+
 		for data := range eventChan {
 			counter++
 			events = append(events, data)
 		}
 
-		for _, event := range events {
-			fmt.Println(event)
-		}
+		// for _, event := range events {
+		// 	fmt.Println(event)
+		// }
 
-		fmt.Printf("counter: %v\n", counter)
+		printWorld(&world.Map)
+		printWorldWAlives(&world.Map)
+		fmt.Printf("counter: end events: %v middle events: %v start events: %v resetcounter: %v \n", counter, middleCounter, incomingCounter, resetCounter)
+
+		time.Sleep(1 * time.Second)
 		fmt.Scanln()
 	}
 }
