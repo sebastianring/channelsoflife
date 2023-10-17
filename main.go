@@ -94,7 +94,10 @@ func (c *Cell) getChan() chan int {
 	return c.Channel
 }
 
-func (c *Cell) updateCell(ch chan *Event) {
+func (c *Cell) updateCell(ch chan *Event, mutex *sync.Mutex) {
+	mutex.Lock()
+	defer mutex.Unlock()
+
 	if c.Alive == true {
 		if c.AliveNeighbors < 2 || c.AliveNeighbors > 3 {
 			c.Alive = false
@@ -105,14 +108,6 @@ func (c *Cell) updateCell(ch chan *Event) {
 			}
 
 			// fmt.Printf("Cell dies at x: %v y: %v\n", c.Pos.x, c.Pos.y)
-
-			ch <- newEvent
-		} else {
-			newEvent := &Event{
-				Pos:       c.Pos,
-				EventType: CellMonitor,
-				Val:       0,
-			}
 
 			ch <- newEvent
 		}
@@ -177,20 +172,6 @@ func getNeighbours(pos Pos, world *World) []*Cell {
 	return neighbours
 }
 
-// func getNeighbours(neighbours chan *Cell, pos Pos, world [][]*Cell) {
-// 	minx := max(0, pos.x-1)
-// 	maxx := min(99, pos.x+1)
-//
-// 	miny := max(0, pos.y-1)
-// 	maxy := min(39, pos.y+1)
-//
-// 	for y := miny; y <= maxy; y++ {
-// 		for x := minx; x <= maxx; x++ {
-// 			neighbours <- world[y][x]
-// 		}
-// 	}
-// }
-
 func updateNeighbors(val int, neighbours []*Cell) {
 	for _, cell := range neighbours {
 		cell.AliveNeighbors += val
@@ -233,8 +214,8 @@ type world struct {
 }
 
 func main() {
-	rows := 10
-	cols := 20
+	rows := 24
+	cols := 50
 
 	world := NewWorld(rows, cols)
 	initialSpawns := int(world.Rows * world.Cols / 3)
@@ -265,7 +246,6 @@ func main() {
 	}
 
 	for {
-		incomingCounter := len(events)
 		cmd := exec.Command("clear")
 		cmd.Stdout = os.Stdout
 		cmd.Run()
@@ -274,31 +254,43 @@ func main() {
 		// 	fmt.Println(event)
 		// }
 
-		eventChan := make(chan *Event, 3)
 		var wg sync.WaitGroup
-		var affectedNeighbours []*Cell
+		var mutex sync.Mutex
+		var affectedCh = make(chan *Cell, 3)
+
+		go func() {
+			wg.Wait()
+			close(affectedCh)
+		}()
 
 		for _, event := range events {
 			wg.Add(1)
 			go func(event *Event) {
 				defer wg.Done()
-				affectedNeighbours = getNeighbours(event.Pos, world)
+				affectedNeighbours := getNeighbours(event.Pos, world)
 
 				for _, cell := range affectedNeighbours {
+					affectedCh <- cell
+
+					mutex.Lock()
 					cell.AliveNeighbors += event.Val
+					mutex.Unlock()
 					// fmt.Printf("Updated cell: %v, %v with val: %v  - now val is: %v \n", cell.Pos.x, cell.Pos.y, event.Val, cell.AliveNeighbors)
 				}
 			}(event)
 		}
 
-		wg.Wait()
+		var affectedCellsTotal []*Cell
 
-		affectedCellsTotal := affectedNeighbours
+		for data := range affectedCh {
+			affectedCellsTotal = append(affectedCellsTotal, data)
+		}
 
 		for _, event := range events {
 			affectedCellsTotal = append(affectedCellsTotal, world.Map[event.Pos.y][event.Pos.x])
 		}
 
+		eventChan := make(chan *Event, 3)
 		go func() {
 			wg.Wait()
 			close(eventChan)
@@ -310,29 +302,24 @@ func main() {
 			go func(cell *Cell) {
 				middleCounter++
 				defer wg.Done()
-				cell.updateCell(eventChan)
+				cell.updateCell(eventChan, &mutex)
 			}(cell)
 		}
 
 		events = []*Event{}
-		resetCounter := len(events)
-		counter := 0
 
 		for data := range eventChan {
-			counter++
 			events = append(events, data)
 		}
 
-		// for _, event := range events {
-		// 	fmt.Println(event)
-		// }
-
 		printWorld(&world.Map)
-		printWorldWAlives(&world.Map)
-		fmt.Printf("counter: end events: %v middle events: %v start events: %v resetcounter: %v \n", counter, middleCounter, incomingCounter, resetCounter)
+		// printWorldWAlives(&world.Map)
+		// printWorldOnlyNegatives(&world.Map)
+		time.Sleep(100 * time.Millisecond)
 
-		time.Sleep(1 * time.Second)
-		fmt.Scanln()
+		if len(events) == 0 {
+			os.Exit(1)
+		}
 	}
 }
 
@@ -368,6 +355,24 @@ func printWorldWAlives(w *[][]*Cell) {
 	}
 }
 
+func printWorldOnlyNegatives(w *[][]*Cell) {
+	for i, row := range *w {
+		if i < 10 {
+			fmt.Printf("%v  ", i)
+		} else {
+			fmt.Printf("%v ", i)
+		}
+		for _, cell := range row {
+			if cell.AliveNeighbors < 0 {
+				fmt.Printf("%v", cell.AliveNeighbors)
+			} else {
+				fmt.Printf("#")
+			}
+		}
+		fmt.Print("\n")
+	}
+}
+
 func max(a int, b int) int {
 	if a < b {
 		return b
@@ -383,46 +388,3 @@ func min(a int, b int) int {
 
 	return b
 }
-
-//
-// neighboursChan := make(chan *Cell, 3)
-// 	neighbours := []*Cell{}
-//
-// 	for _, cell := range relevantCells {
-// 		wg.Add(1)
-// 		go func(cell *Cell) {
-// 			defer wg.Done()
-// 			getNeighbours(neighboursChan, cell.Pos, world)
-// 		}(cell)
-// 	}
-//
-// 	go func() {
-// 		wg.Wait()
-// 		close(neighboursChan)
-// 	}()
-//
-// 	for data := range neighboursChan {
-// 		if !isCellInSlice(data, neighbours) {
-// 			neighbours = append(neighbours, data)
-// 		}
-// 	}
-//
-// 	fmt.Println(len(neighbours))
-//
-// 	for _, cell := range neighbours {
-// 		wg.Add(1)
-// 		go func(cell *Cell) {
-// 			defer wg.Done()
-// 			cell.AliveNeighbors++
-// 		}(cell)
-//
-
-// func isCellInSlice(cell *Cell, slice []*Cell) bool {
-// 	for _, cellInSlice := range slice {
-// 		if cell.Pos == cellInSlice.Pos {
-// 			return true
-// 		}
-// 	}
-// 	return false
-// }
-//}
